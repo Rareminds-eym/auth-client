@@ -1,0 +1,44 @@
+{
+  "name": "@rareminds-eym/auth-client",
+  "version": "1.0.0",
+  "description": "Production-grade auth client for SSO with cookie-based refresh tokens and in-memory JWT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "auth",
+    "sso",
+    "jwt",
+    "refresh-token",
+    "cookie",
+    "rareminds",
+    "cloudflare"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rareminds/auth-client.git"
+  },
+  "license": "MIT"
+}
