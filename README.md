@@ -534,6 +534,45 @@ The `prepublishOnly` script runs `clean && build` automatically before `npm publ
 
 Output includes `.js`, `.d.ts`, `.d.ts.map`, and `.js.map` files for full IDE support.
 
+## Installing in Your Project
+
+Since this package is hosted on GitHub Packages (not npmjs.org), consuming projects need a one-time setup.
+
+### 1. Add `.npmrc` to your project root
+
+If you already have an `.npmrc`, just add the registry line:
+
+```
+@rareminds-eym:registry=https://npm.pkg.github.com
+```
+
+Example `.npmrc` with other settings:
+
+```
+legacy-peer-deps=true
+@rareminds-eym:registry=https://npm.pkg.github.com
+```
+
+### 2. Authenticate (one-time, machine-level)
+
+Generate a GitHub Personal Access Token (classic) with `read:packages` scope, then run:
+
+```bash
+echo "//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN" >> ~/.npmrc
+```
+
+This writes the token to your user-level `~/.npmrc` — it's not committed to your project.
+
+### 3. Install
+
+```bash
+npm install @rareminds-eym/auth-client
+```
+
+> Every project that consumes `@rareminds-eym/*` packages needs the `.npmrc` registry line. The auth token in `~/.npmrc` is shared across all projects on your machine.
+
+---
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
