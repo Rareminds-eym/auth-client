@@ -4,10 +4,22 @@ import { SyncChannel } from "../sync/channel.js";
 import type {
   LoginPayload,
   SignupPayload,
-  AuthResponse,
+  SwitchOrgPayload,
+  CreateInvitePayload,
+  AcceptInvitePayload,
+  VerifyEmailPayload,
+  LoginResponse,
+  SignupResponse,
+  RefreshResponse,
+  SwitchOrgResponse,
+  ListOrgsResponse,
+  CreateInviteResponse,
+  AcceptInviteResponse,
+  RequestVerificationResponse,
+  VerifyEmailResponse,
+  MeResponse,
   AuthClientConfig,
   SessionResult,
-  ValidateSessionResult,
   AuthStateChangeCallback,
 } from "../types/auth.js";
 
@@ -22,7 +34,7 @@ export class AuthClient {
 
   #unsubscribe: (() => void) | null = null;
   #initialized = false;
-  #refreshing: Promise<AuthResponse> | null = null;
+  #refreshing: Promise<RefreshResponse> | null = null;
   #listeners = new Set<AuthStateChangeCallback>();
   #destroyed = false;
 
@@ -30,8 +42,6 @@ export class AuthClient {
    * Counter for nested cross-tab rehydrations.
    * Incremented when a cross-tab event triggers initSession(),
    * decremented when it completes. Broadcasts are suppressed while > 0.
-   * A counter (not boolean) prevents rapid cross-tab events from
-   * prematurely re-enabling broadcasts.
    */
   #suppressBroadcastDepth = 0;
 
@@ -40,7 +50,6 @@ export class AuthClient {
     this.#onSessionExpired = config.onSessionExpired;
     this.#debug = config.debug ?? false;
 
-    // Instance-scoped store and channel — safe for multi-client usage
     this.#store = new MemoryStore();
     this.#channel = new SyncChannel(DEFAULT_CHANNEL_NAME);
 
@@ -54,16 +63,13 @@ export class AuthClient {
    * Authenticate with email + password.
    * Sets the access token in memory; refresh token is set via HttpOnly cookie by the server.
    */
-  async login(payload: LoginPayload): Promise<AuthResponse> {
+  async login(payload: LoginPayload): Promise<LoginResponse> {
     this.#assertNotDestroyed();
     this.#log("login: starting");
 
-    const data = await fetcher<AuthResponse>(
+    const data = await fetcher<LoginResponse>(
       `${this.#baseURL}/auth/login`,
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
+      { method: "POST", body: JSON.stringify(payload) },
     );
 
     this.#store.set(data.access_token);
@@ -75,19 +81,16 @@ export class AuthClient {
   }
 
   /**
-   * Register a new user (+ optional organization).
+   * Register a new user + organization.
    * Behaves identically to login on success.
    */
-  async signup(payload: SignupPayload): Promise<AuthResponse> {
+  async signup(payload: SignupPayload): Promise<SignupResponse> {
     this.#assertNotDestroyed();
     this.#log("signup: starting");
 
-    const data = await fetcher<AuthResponse>(
+    const data = await fetcher<SignupResponse>(
       `${this.#baseURL}/auth/signup`,
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
+      { method: "POST", body: JSON.stringify(payload) },
     );
 
     this.#store.set(data.access_token);
@@ -100,17 +103,14 @@ export class AuthClient {
 
   /**
    * End the session.
-   * Server deletes the session row and clears the refresh cookie.
+   * Server revokes the session and clears the refresh cookie.
    */
   async logout(): Promise<void> {
     this.#log("logout: starting");
 
     try {
-      await fetcher(`${this.#baseURL}/auth/logout`, {
-        method: "POST",
-      });
+      await fetcher(`${this.#baseURL}/auth/logout`, { method: "POST" });
     } catch {
-      // best-effort — clear local state regardless
       this.#log("logout: server call failed, clearing local state anyway");
     }
 
@@ -124,7 +124,7 @@ export class AuthClient {
    * Silent token refresh using the HttpOnly refresh-token cookie.
    * De-duplicated: concurrent calls share a single in-flight request.
    */
-  async refresh(): Promise<AuthResponse> {
+  async refresh(): Promise<RefreshResponse> {
     this.#assertNotDestroyed();
 
     if (this.#refreshing) {
@@ -142,8 +142,8 @@ export class AuthClient {
     }
   }
 
-  async #executeRefresh(): Promise<AuthResponse> {
-    const data = await fetcher<AuthResponse>(
+  async #executeRefresh(): Promise<RefreshResponse> {
+    const data = await fetcher<RefreshResponse>(
       `${this.#baseURL}/auth/refresh`,
       { method: "POST" },
     );
@@ -157,12 +157,142 @@ export class AuthClient {
   }
 
   /**
+   * Switch the active organization.
+   * Revokes the current session and creates a new one scoped to the target org.
+   * The server sets rotated cookies automatically.
+   */
+  async switchOrg(payload: SwitchOrgPayload): Promise<SwitchOrgResponse> {
+    this.#assertNotDestroyed();
+    this.#log("switchOrg: starting", { org_id: payload.org_id });
+
+    const token = this.#store.get();
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
+    const data = await fetcher<SwitchOrgResponse>(
+      `${this.#baseURL}/auth/switch-org`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+      },
+    );
+
+    this.#store.set(data.access_token);
+    this.#emit("REFRESH");
+    this.#broadcastIfAllowed({ type: "REFRESH" });
+    this.#log("switchOrg: success", { org_id: data.org_id });
+
+    return data;
+  }
+
+  /**
+   * List all organizations the current user belongs to.
+   */
+  async listOrgs(): Promise<ListOrgsResponse> {
+    this.#assertNotDestroyed();
+    this.#log("listOrgs: fetching");
+
+    const token = this.#store.get();
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
+    return fetcher<ListOrgsResponse>(
+      `${this.#baseURL}/auth/orgs`,
+      { method: "GET", headers },
+    );
+  }
+
+  /**
+   * Create an invite for a user to join the caller's active organization.
+   * Requires owner or admin role.
+   */
+  async createInvite(payload: CreateInvitePayload): Promise<CreateInviteResponse> {
+    this.#assertNotDestroyed();
+    this.#log("createInvite: starting", { email: payload.email });
+
+    const token = this.#store.get();
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
+    return fetcher<CreateInviteResponse>(
+      `${this.#baseURL}/auth/invite`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  /**
+   * Accept an invite token. Creates the user if they don't exist (password required).
+   * Logs the user in to the invited organization.
+   */
+  async acceptInvite(payload: AcceptInvitePayload): Promise<AcceptInviteResponse> {
+    this.#assertNotDestroyed();
+    this.#log("acceptInvite: starting");
+
+    const data = await fetcher<AcceptInviteResponse>(
+      `${this.#baseURL}/auth/invite/accept`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+
+    this.#store.set(data.access_token);
+    this.#emit("LOGIN");
+    this.#broadcastIfAllowed({ type: "LOGIN" });
+    this.#log("acceptInvite: success");
+
+    return data;
+  }
+
+  /**
+   * Request an email verification token for the current user.
+   * Requires authentication. Returns the token for delivery via email.
+   */
+  async requestVerification(): Promise<RequestVerificationResponse> {
+    this.#assertNotDestroyed();
+    this.#log("requestVerification: starting");
+
+    const token = this.#store.get();
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
+    return fetcher<RequestVerificationResponse>(
+      `${this.#baseURL}/auth/request-verification`,
+      { method: "POST", headers },
+    );
+  }
+
+  /**
+   * Verify an email address using a verification token.
+   * No authentication required — the user clicks a link from their email.
+   */
+  async verifyEmail(payload: VerifyEmailPayload): Promise<VerifyEmailResponse> {
+    this.#assertNotDestroyed();
+    this.#log("verifyEmail: starting");
+
+    return fetcher<VerifyEmailResponse>(
+      `${this.#baseURL}/auth/verify-email`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  /**
    * Restore session on page load / reload.
    * Call this once at app startup (before rendering protected routes).
    *
    * Uses the refresh-token cookie to obtain a fresh access token.
-   * On failure, clears the token but preserves `#initialized` if it was
-   * previously true (avoids breaking consumers during cross-tab rehydration).
    */
   async initSession(): Promise<SessionResult> {
     this.#log("initSession: starting");
@@ -174,10 +304,6 @@ export class AuthClient {
       return { authenticated: true };
     } catch {
       this.#store.clear();
-      // Only set initialized=false if this is the first call.
-      // If we were already initialized (e.g. cross-tab rehydration failed),
-      // keep the flag true — the token is gone but the app knows it was
-      // initialized and can react to isAuthenticated() being false.
       if (!this.#initialized) {
         this.#initialized = false;
       }
@@ -193,7 +319,7 @@ export class AuthClient {
    * 2. On 401, silently refreshes and retries once.
    * 3. On second failure, triggers logout + onSessionExpired callback.
    *
-   * Respects the caller's AbortSignal — if aborted, the retry is skipped.
+   * Respects the caller's AbortSignal.
    */
   async fetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
     this.#assertNotDestroyed();
@@ -214,7 +340,6 @@ export class AuthClient {
     let res = await makeRequest(this.#store.get());
 
     if (res.status === 401) {
-      // If the caller already aborted, don't bother retrying
       if (signal?.aborted) {
         this.#log("fetch: 401 received but signal already aborted, skipping retry");
         return res;
@@ -237,13 +362,10 @@ export class AuthClient {
   }
 
   /**
-   * Validate the current session against the SSO server.
-   * Returns user info if the session is still valid.
-   *
-   * Uses the access token (Bearer) + cookie for validation.
-   * This is an optional check — most flows rely on initSession() + refresh instead.
+   * Get the current user's identity from the SSO server.
+   * Calls GET /auth/me with the current access token.
    */
-  async validateSession(): Promise<ValidateSessionResult> {
+  async getMe(): Promise<MeResponse> {
     this.#assertNotDestroyed();
 
     const token = this.#store.get();
@@ -251,11 +373,17 @@ export class AuthClient {
       ? { Authorization: `Bearer ${token}` }
       : {};
 
-    const data = await fetcher<ValidateSessionResult>(
-      `${this.#baseURL}/auth/validate-session`,
-      { method: "POST", headers },
+    return fetcher<MeResponse>(
+      `${this.#baseURL}/auth/me`,
+      { method: "GET", headers },
     );
-    return data;
+  }
+
+  /**
+   * @deprecated Use getMe() instead.
+   */
+  async validateSession(): Promise<MeResponse> {
+    return this.getMe();
   }
 
   // ─── Event System ──────────────────────────────────────────
@@ -263,13 +391,6 @@ export class AuthClient {
   /**
    * Subscribe to auth state changes (login, logout, refresh).
    * Returns an unsubscribe function.
-   *
-   * Optionally fires immediately with the current state if `fireImmediately` is true.
-   *
-   * @example
-   * const unsub = auth.onAuthStateChange((event) => {
-   *   if (event === "LOGOUT") router.push("/login");
-   * });
    */
   onAuthStateChange(
     callback: AuthStateChangeCallback,
@@ -344,8 +465,6 @@ export class AuthClient {
 
         case "LOGIN":
         case "REFRESH":
-          // Another tab logged in or refreshed — rehydrate this tab.
-          // Suppress broadcast to prevent infinite ping-pong between tabs.
           this.#log(`cross-tab: ${event.type} received, rehydrating`);
           this.#suppressBroadcastDepth++;
           this.initSession().finally(() => {
@@ -358,10 +477,6 @@ export class AuthClient {
 
   // ─── Internal helpers ──────────────────────────────────────
 
-  /**
-   * Broadcast only when not suppressed (cross-tab rehydration)
-   * and not destroyed. Consistent for all event types.
-   */
   #broadcastIfAllowed(event: { type: "LOGIN" | "LOGOUT" | "REFRESH" }): void {
     if (this.#suppressBroadcastDepth === 0 && !this.#destroyed) {
       this.#channel.broadcast(event);
@@ -378,15 +493,12 @@ export class AuthClient {
 
   #log(...args: unknown[]): void {
     if (this.#debug) {
-      // eslint-disable-next-line no-console
       console.debug("[AuthClient]", ...args);
     }
   }
 
   /**
    * Tear down event listeners and release resources.
-   * Call this if you ever need to dispose of the client instance.
-   *
    * After calling destroy(), all public methods will throw.
    */
   destroy(): void {
