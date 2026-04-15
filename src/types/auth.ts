@@ -92,6 +92,44 @@ export interface VerifyEmailPayload {
   token: string;
 }
 
+export interface ForgotPasswordPayload {
+  email: string;
+}
+
+export interface ResetPasswordPayload {
+  token: string;
+  password: string;
+}
+
+export interface ForgotPasswordResponse {
+  message?: string;
+  reset_token?: string;
+  expires_at?: string;
+}
+
+export interface ResetPasswordResponse {
+  reset: boolean;
+}
+
+export interface CancelInvitePayload {
+  invite_id: string;
+}
+
+export interface CancelInviteResponse {
+  cancelled: boolean;
+}
+
+export interface ResendInvitePayload {
+  invite_id: string;
+}
+
+export interface ResendInviteResponse {
+  invite_id: string;
+  token: string;
+  email: string;
+  expires_at: string;
+}
+
 export interface MeResponse {
   sub: string;
   email: string;

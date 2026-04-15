@@ -8,6 +8,10 @@ import type {
   CreateInvitePayload,
   AcceptInvitePayload,
   VerifyEmailPayload,
+  ForgotPasswordPayload,
+  ResetPasswordPayload,
+  CancelInvitePayload,
+  ResendInvitePayload,
   LoginResponse,
   SignupResponse,
   RefreshResponse,
@@ -17,6 +21,10 @@ import type {
   AcceptInviteResponse,
   RequestVerificationResponse,
   VerifyEmailResponse,
+  ForgotPasswordResponse,
+  ResetPasswordResponse,
+  CancelInviteResponse,
+  ResendInviteResponse,
   MeResponse,
   AuthClientConfig,
   SessionResult,
@@ -283,6 +291,85 @@ export class AuthClient {
       `${this.#baseURL}/auth/verify-email`,
       {
         method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  /**
+   * Request a password reset token. Always returns success to prevent email enumeration.
+   * The token should be delivered to the user via email.
+   */
+  async forgotPassword(payload: ForgotPasswordPayload): Promise<ForgotPasswordResponse> {
+    this.#assertNotDestroyed();
+    this.#log("forgotPassword: starting");
+
+    return fetcher<ForgotPasswordResponse>(
+      `${this.#baseURL}/auth/forgot-password`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  /**
+   * Reset password using a valid reset token.
+   * Revokes all existing sessions (forces re-login everywhere).
+   */
+  async resetPassword(payload: ResetPasswordPayload): Promise<ResetPasswordResponse> {
+    this.#assertNotDestroyed();
+    this.#log("resetPassword: starting");
+
+    return fetcher<ResetPasswordResponse>(
+      `${this.#baseURL}/auth/reset-password`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  /**
+   * Cancel a pending invite. Requires owner/admin role or being the original inviter.
+   */
+  async cancelInvite(payload: CancelInvitePayload): Promise<CancelInviteResponse> {
+    this.#assertNotDestroyed();
+    this.#log("cancelInvite: starting");
+
+    const token = this.#store.get();
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
+    return fetcher<CancelInviteResponse>(
+      `${this.#baseURL}/auth/invite/cancel`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  /**
+   * Resend an invite with a new token and extended expiry.
+   * Requires owner or admin role.
+   */
+  async resendInvite(payload: ResendInvitePayload): Promise<ResendInviteResponse> {
+    this.#assertNotDestroyed();
+    this.#log("resendInvite: starting");
+
+    const token = this.#store.get();
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
+    return fetcher<ResendInviteResponse>(
+      `${this.#baseURL}/auth/invite/resend`,
+      {
+        method: "POST",
+        headers,
         body: JSON.stringify(payload),
       },
     );

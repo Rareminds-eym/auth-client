@@ -1,6 +1,6 @@
 # @rareminds-eym/auth-client
 
-Browser authentication SDK for the RareMinds SSO platform. Handles login, signup, silent refresh, session restore, org switching, invites, email verification, multi-tab sync, and authenticated API calls.
+Browser authentication SDK for the RareMinds SSO platform. Handles login, signup, silent refresh, session restore, org switching, invite management, email verification, password reset, multi-tab sync, and authenticated API calls.
 
 ## Features
 
@@ -12,6 +12,8 @@ Browser authentication SDK for the RareMinds SSO platform. Handles login, signup
 - De-duplicated refresh — concurrent calls share a single in-flight request
 - Full multi-tenant support — org switching, org listing, invite flows
 - Email verification flow
+- Password reset flow (forgot + reset)
+- Invite management — create, accept, cancel, resend
 - Framework-agnostic — React, Vue, Svelte, Angular, vanilla JS
 - Zero runtime dependencies
 - Full TypeScript with strict response types matching the SSO worker
@@ -150,6 +152,44 @@ const { access_token, user, org_id } = await auth.acceptInvite({
 });
 ```
 
+#### `cancelInvite(payload): Promise<CancelInviteResponse>`
+
+Cancel a pending invite. Requires owner/admin role or being the original inviter.
+
+```ts
+const { cancelled } = await auth.cancelInvite({ invite_id: "uuid" });
+```
+
+#### `resendInvite(payload): Promise<ResendInviteResponse>`
+
+Resend an invite with a new token and extended expiry. Requires owner/admin.
+
+```ts
+const { invite_id, token, email, expires_at } = await auth.resendInvite({ invite_id: "uuid" });
+```
+
+### Password Reset
+
+#### `forgotPassword(payload): Promise<ForgotPasswordResponse>`
+
+Request a password reset token. Always succeeds to prevent email enumeration.
+
+```ts
+const result = await auth.forgotPassword({ email: "user@example.com" });
+// { reset_token, expires_at } or { message: "If an account exists..." }
+```
+
+#### `resetPassword(payload): Promise<ResetPasswordResponse>`
+
+Reset password using a valid token. Revokes all sessions.
+
+```ts
+const { reset } = await auth.resetPassword({
+  token: "reset-uuid",
+  password: "newpassword",
+});
+```
+
 ### Email Verification
 
 #### `requestVerification(): Promise<RequestVerificationResponse>`
@@ -238,13 +278,17 @@ Uses `BroadcastChannel` with `localStorage` fallback. SSR-safe (degrades to no-o
 import type {
   // Request payloads
   LoginPayload, SignupPayload, SwitchOrgPayload,
-  CreateInvitePayload, AcceptInvitePayload, VerifyEmailPayload,
+  CreateInvitePayload, AcceptInvitePayload, CancelInvitePayload,
+  ResendInvitePayload, VerifyEmailPayload,
+  ForgotPasswordPayload, ResetPasswordPayload,
 
   // Response types (match SSO worker exactly)
   LoginResponse, SignupResponse, RefreshResponse,
   SwitchOrgResponse, ListOrgsResponse, OrgListItem,
   CreateInviteResponse, AcceptInviteResponse,
+  CancelInviteResponse, ResendInviteResponse,
   RequestVerificationResponse, VerifyEmailResponse,
+  ForgotPasswordResponse, ResetPasswordResponse,
   MeResponse, MembershipStatus,
 
   // Client
