@@ -9,6 +9,7 @@ export type {
   CreateInvitePayload,
   AcceptInvitePayload,
   VerifyEmailPayload,
+  RequestVerificationPayload,
   ForgotPasswordPayload,
   ResetPasswordPayload,
   CancelInvitePayload,

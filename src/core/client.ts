@@ -8,6 +8,7 @@ import type {
   CreateInvitePayload,
   AcceptInvitePayload,
   VerifyEmailPayload,
+  RequestVerificationPayload,
   ForgotPasswordPayload,
   ResetPasswordPayload,
   CancelInvitePayload,
@@ -215,7 +216,7 @@ export class AuthClient {
 
   /**
    * Create an invite for a user to join the caller's active organization.
-   * Requires owner or admin role.
+   * Requires owner or admin role. The server sends the invitation email directly.
    */
   async createInvite(payload: CreateInvitePayload): Promise<CreateInviteResponse> {
     this.#assertNotDestroyed();
@@ -261,10 +262,11 @@ export class AuthClient {
   }
 
   /**
-   * Request an email verification token for the current user.
-   * Requires authentication. Returns the token for delivery via email.
+   * Request a verification email for the current user.
+   * Requires authentication. The server sends the email directly.
+   * Returns a confirmation message, or { already_verified: true } if already verified.
    */
-  async requestVerification(): Promise<RequestVerificationResponse> {
+  async requestVerification(payload?: RequestVerificationPayload): Promise<RequestVerificationResponse> {
     this.#assertNotDestroyed();
     this.#log("requestVerification: starting");
 
@@ -275,7 +277,7 @@ export class AuthClient {
 
     return fetcher<RequestVerificationResponse>(
       `${this.#baseURL}/auth/request-verification`,
-      { method: "POST", headers },
+      { method: "POST", headers, body: JSON.stringify(payload ?? {}) },
     );
   }
 
@@ -297,8 +299,9 @@ export class AuthClient {
   }
 
   /**
-   * Request a password reset token. Always returns success to prevent email enumeration.
-   * The token should be delivered to the user via email.
+   * Request a password reset email. Always returns the same message
+   * to prevent email enumeration. If the account exists, the server
+   * sends a reset email with a time-limited link.
    */
   async forgotPassword(payload: ForgotPasswordPayload): Promise<ForgotPasswordResponse> {
     this.#assertNotDestroyed();
@@ -353,8 +356,8 @@ export class AuthClient {
   }
 
   /**
-   * Resend an invite with a new token and extended expiry.
-   * Requires owner or admin role.
+   * Resend an invite email with a new token and extended expiry.
+   * Requires owner or admin role. The server sends the invitation email directly.
    */
   async resendInvite(payload: ResendInvitePayload): Promise<ResendInviteResponse> {
     this.#assertNotDestroyed();

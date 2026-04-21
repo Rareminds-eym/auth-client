@@ -9,6 +9,8 @@ export interface SignupPayload {
   email: string;
   password: string;
   org_name: string;
+  /** Base URL for email links. Must be in the server's ALLOWED_APP_URLS allowlist. */
+  redirect_url?: string;
 }
 
 export interface SwitchOrgPayload {
@@ -19,6 +21,8 @@ export interface CreateInvitePayload {
   email: string;
   org_id: string;
   role: string[];
+  /** Base URL for email links. Must be in the server's ALLOWED_APP_URLS allowlist. */
+  redirect_url?: string;
 }
 
 export interface AcceptInvitePayload {
@@ -67,7 +71,6 @@ export interface ListOrgsResponse {
 
 export interface CreateInviteResponse {
   invite_id: string;
-  token: string;
   email: string;
   expires_at: string;
 }
@@ -79,8 +82,7 @@ export interface AcceptInviteResponse {
 }
 
 export interface RequestVerificationResponse {
-  verification_token?: string;
-  expires_at?: string;
+  message?: string;
   already_verified?: boolean;
 }
 
@@ -92,8 +94,15 @@ export interface VerifyEmailPayload {
   token: string;
 }
 
+export interface RequestVerificationPayload {
+  /** Base URL for email links. Must be in the server's ALLOWED_APP_URLS allowlist. */
+  redirect_url?: string;
+}
+
 export interface ForgotPasswordPayload {
   email: string;
+  /** Base URL for email links. Must be in the server's ALLOWED_APP_URLS allowlist. */
+  redirect_url?: string;
 }
 
 export interface ResetPasswordPayload {
@@ -102,9 +111,7 @@ export interface ResetPasswordPayload {
 }
 
 export interface ForgotPasswordResponse {
-  message?: string;
-  reset_token?: string;
-  expires_at?: string;
+  message: string;
 }
 
 export interface ResetPasswordResponse {
@@ -121,11 +128,12 @@ export interface CancelInviteResponse {
 
 export interface ResendInvitePayload {
   invite_id: string;
+  /** Base URL for email links. Must be in the server's ALLOWED_APP_URLS allowlist. */
+  redirect_url?: string;
 }
 
 export interface ResendInviteResponse {
   invite_id: string;
-  token: string;
   email: string;
   expires_at: string;
 }
