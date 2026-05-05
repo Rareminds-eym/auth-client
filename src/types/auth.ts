@@ -13,6 +13,16 @@ export interface SignupPayload {
   redirect_url?: string;
 }
 
+export interface SignupMemberPayload {
+  email: string;
+  password: string;
+  role: string;
+  /** Optional: join a specific org (if open registration is enabled). */
+  org_id?: string;
+  /** Base URL for email links. Must be in the server's ALLOWED_APP_URLS allowlist. */
+  redirect_url?: string;
+}
+
 export interface SwitchOrgPayload {
   org_id: string;
 }
@@ -45,6 +55,12 @@ export interface SignupResponse {
   access_token: string;
   user: { id: string; email: string };
   org: { id: string; name: string; slug: string };
+}
+
+export interface SignupMemberResponse {
+  access_token: string;
+  user: { id: string; email: string };
+  org?: { id: string };
 }
 
 export interface RefreshResponse {

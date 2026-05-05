@@ -5,6 +5,7 @@ export { SyncChannel } from "./sync/channel.js";
 export type {
   LoginPayload,
   SignupPayload,
+  SignupMemberPayload,
   SwitchOrgPayload,
   CreateInvitePayload,
   AcceptInvitePayload,
@@ -16,6 +17,7 @@ export type {
   ResendInvitePayload,
   LoginResponse,
   SignupResponse,
+  SignupMemberResponse,
   RefreshResponse,
   SwitchOrgResponse,
   ListOrgsResponse,

@@ -4,6 +4,7 @@ import { SyncChannel } from "../sync/channel.js";
 import type {
   LoginPayload,
   SignupPayload,
+  SignupMemberPayload,
   SwitchOrgPayload,
   CreateInvitePayload,
   AcceptInvitePayload,
@@ -15,6 +16,7 @@ import type {
   ResendInvitePayload,
   LoginResponse,
   SignupResponse,
+  SignupMemberResponse,
   RefreshResponse,
   SwitchOrgResponse,
   ListOrgsResponse,
@@ -106,6 +108,28 @@ export class AuthClient {
     this.#emit("LOGIN");
     this.#broadcastIfAllowed({ type: "LOGIN" });
     this.#log("signup: success");
+
+    return data;
+  }
+
+  /**
+   * Register a new member user (no org creation).
+   * Creates a user and optionally joins a specified org with the given role.
+   * Behaves identically to login on success.
+   */
+  async signupMember(payload: SignupMemberPayload): Promise<SignupMemberResponse> {
+    this.#assertNotDestroyed();
+    this.#log("signupMember: starting");
+
+    const data = await fetcher<SignupMemberResponse>(
+      `${this.#baseURL}/auth/signup-member`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+
+    this.#store.set(data.access_token);
+    this.#emit("LOGIN");
+    this.#broadcastIfAllowed({ type: "LOGIN" });
+    this.#log("signupMember: success");
 
     return data;
   }
