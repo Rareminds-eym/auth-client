@@ -84,6 +84,7 @@ export class AuthClient {
     );
 
     this.#store.set(data.access_token);
+    this.#initialized = true;
     this.#emit("LOGIN");
     this.#broadcastIfAllowed({ type: "LOGIN" });
     this.#log("login: success");
@@ -105,6 +106,7 @@ export class AuthClient {
     );
 
     this.#store.set(data.access_token);
+    this.#initialized = true;
     this.#emit("LOGIN");
     this.#broadcastIfAllowed({ type: "LOGIN" });
     this.#log("signup: success");
@@ -127,6 +129,7 @@ export class AuthClient {
     );
 
     this.#store.set(data.access_token);
+    this.#initialized = true;
     this.#emit("LOGIN");
     this.#broadcastIfAllowed({ type: "LOGIN" });
     this.#log("signupMember: success");
@@ -213,6 +216,7 @@ export class AuthClient {
     );
 
     this.#store.set(data.access_token);
+    this.#initialized = true;
     this.#emit("REFRESH");
     this.#broadcastIfAllowed({ type: "REFRESH" });
     this.#log("switchOrg: success", { org_id: data.org_id });
@@ -278,6 +282,7 @@ export class AuthClient {
     );
 
     this.#store.set(data.access_token);
+    this.#initialized = true;
     this.#emit("LOGIN");
     this.#broadcastIfAllowed({ type: "LOGIN" });
     this.#log("acceptInvite: success");
