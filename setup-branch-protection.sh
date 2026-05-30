@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Branch Protection Setup Script with Diagnostics
+# Branch Protection Setup Script with Full Diagnostics
 # Creates production, main, and dev branches (if they don't exist)
 # Locks them and only allows merges by the repository owner
 
@@ -155,17 +155,17 @@ EOF
     "apps": []
   },
   "allow_force_pushes": false,
-  "allow_deletions": false,
-  "required_conversation_resolution": false
+  "allow_deletions": false
 }
 EOF
     
     # Replace placeholder with actual username
     sed -i "s/USERNAME_PLACEHOLDER/$USERNAME/g" "$TEMP_FILE"
     
-    # Try to apply protection
-    RESPONSE=$(gh api repos/$ORG/$REPO/branches/$BRANCH/protection \
-      --input "$TEMP_FILE" 2>&1)
+    # Try to apply protection and capture full response
+    ERROR_FILE=$(mktemp)
+    gh api repos/$ORG/$REPO/branches/$BRANCH/protection \
+      --input "$TEMP_FILE" > "$ERROR_FILE" 2>&1
     
     RESPONSE_CODE=$?
     
@@ -174,10 +174,13 @@ EOF
       ((REPO_SUCCESS++))
     else
       echo "    ✗ Failed to apply protection rules to '$BRANCH'"
-      echo "      Error: $(echo "$RESPONSE" | head -1)"
+      # Display full error
+      ERROR_MSG=$(cat "$ERROR_FILE")
+      echo "      Full Error:"
+      echo "$ERROR_MSG" | sed 's/^/        /'
     fi
     
-    rm -f "$TEMP_FILE"
+    rm -f "$TEMP_FILE" "$ERROR_FILE"
   done
   
   echo ""
@@ -193,6 +196,11 @@ EOF
   fi
   
   echo ""
+  
+  # Only run first 3 repos for testing with full error output
+  if [ "$1" == "--debug" ] && [ ${#REPOS[@]} -gt 3 ]; then
+    break
+  fi
 done
 
 echo "================================================"
@@ -202,12 +210,4 @@ echo "Summary:"
 echo "  ✓ Repositories fully configured: $SUCCESS"
 echo "  ⚠ Partially configured/Skipped: $SKIPPED"
 echo "  ✗ Failed: $FAILED"
-echo ""
-echo "Protected Branches Configuration:"
-echo "  • production, main, dev"
-echo "    - Created from default branch if missing"
-echo "    - Requires 1 PR approval"
-echo "    - Only $USERNAME can push/merge"
-echo "    - No branch deletion allowed"
-echo "    - Rules enforced for administrators too"
 echo ""
