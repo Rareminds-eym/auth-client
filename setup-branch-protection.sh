@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # Branch Protection Setup Script
-# Locks production, main, and dev branches
-# Only allows merges by the repository owner
+# Creates production, main, and dev branches (if they don't exist)
+# Locks them and only allows merges by the repository owner
+# Only allows force pushes for the repository owner
 
 REPOS=(
   "auth-client"
@@ -63,11 +64,13 @@ echo "  Total repos: ${#REPOS[@]}"
 echo "  Branches to protect: ${BRANCHES[@]}"
 echo ""
 echo "This will:"
-echo "  1. Lock 'production', 'main', and 'dev' branches"
-echo "  2. Restrict merges to: $USERNAME only"
-echo "  3. Require 1 PR approval"
-echo "  4. Prevent force pushes and branch deletion"
-echo "  5. Enforce rules for administrators too"
+echo "  1. Create 'production', 'main', and 'dev' branches (if missing)"
+echo "  2. Lock these branches - only merges allowed"
+echo "  3. Restrict merges to: $USERNAME only"
+echo "  4. Allow force pushes ONLY to: $USERNAME"
+echo "  5. Require 1 PR approval"
+echo "  6. Prevent branch deletion"
+echo "  7. Enforce rules for administrators too"
 echo ""
 read -p "Continue? (y/n) " -n 1 -r
 echo
@@ -89,18 +92,55 @@ for REPO in "${REPOS[@]}"; do
   echo "Repository: $ORG/$REPO"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   
+  # Get the default branch
+  DEFAULT_BRANCH=$(gh api repos/$ORG/$REPO --jq '.default_branch' 2>/dev/null)
+  if [ -z "$DEFAULT_BRANCH" ]; then
+    echo "  ✗ Failed to fetch repository info"
+    ((FAILED++))
+    continue
+  fi
+  
+  echo "  Default branch: $DEFAULT_BRANCH"
+  
   REPO_SUCCESS=0
   
   for BRANCH in "${BRANCHES[@]}"; do
+    echo ""
+    echo "  ─ Processing '$BRANCH' branch..."
+    
     # Check if branch exists
-    if ! gh api repos/$ORG/$REPO/branches/$BRANCH &> /dev/null; then
-      echo "  ⚠ '$BRANCH' branch not found - skipping"
-      continue
+    if gh api repos/$ORG/$REPO/branches/$BRANCH &> /dev/null; then
+      echo "    ✓ '$BRANCH' branch already exists"
+    else
+      echo "    → Creating '$BRANCH' branch from '$DEFAULT_BRANCH'..."
+      
+      # Get the SHA of the default branch
+      DEFAULT_SHA=$(gh api repos/$ORG/$REPO/git/refs/heads/$DEFAULT_BRANCH --jq '.object.sha' 2>/dev/null)
+      
+      if [ -z "$DEFAULT_SHA" ]; then
+        echo "    ✗ Failed to get default branch SHA"
+        continue
+      fi
+      
+      # Create the new branch
+      if gh api repos/$ORG/$REPO/git/refs \
+        --input - << EOF > /dev/null 2>&1
+{
+  "ref": "refs/heads/$BRANCH",
+  "sha": "$DEFAULT_SHA"
+}
+EOF
+      then
+        echo "    ✓ '$BRANCH' branch created successfully"
+      else
+        echo "    ✗ Failed to create '$BRANCH' branch"
+        continue
+      fi
     fi
     
-    echo "  → Protecting '$BRANCH' branch..."
+    echo "    → Applying protection rules to '$BRANCH'..."
     
-    # Configure branch protection
+    # Configure branch protection with force push allowed only for USERNAME
     gh api repos/$ORG/$REPO/branches/$BRANCH/protection \
       --input - << EOF > /dev/null 2>&1
 {
@@ -117,7 +157,14 @@ for REPO in "${REPOS[@]}"; do
     "teams": [],
     "apps": []
   },
-  "allow_force_pushes": false,
+  "allow_force_pushes": {
+    "enabled": true,
+    "dismissal_restrictions": {
+      "users": ["$USERNAME"],
+      "teams": [],
+      "apps": []
+    }
+  },
   "allow_deletions": false,
   "required_conversation_resolution": false,
   "required_linear_history": false
@@ -125,19 +172,23 @@ for REPO in "${REPOS[@]}"; do
 EOF
 
     if [ $? -eq 0 ]; then
-      echo "    ✓ '$BRANCH' protected successfully"
+      echo "    ✓ Protection rules applied to '$BRANCH'"
       ((REPO_SUCCESS++))
     else
-      echo "    ✗ Failed to protect '$BRANCH'"
-      ((FAILED++))
+      echo "    ✗ Failed to apply protection rules to '$BRANCH'"
     fi
   done
   
+  echo ""
   if [ $REPO_SUCCESS -eq 3 ]; then
-    echo "  ✓ $REPO fully configured"
+    echo "  ✓✓✓ $REPO fully configured"
     ((SUCCESS++))
-  else
+  elif [ $REPO_SUCCESS -gt 0 ]; then
+    echo "  ⚠⚠⚠ $REPO partially configured ($REPO_SUCCESS/3 branches)"
     ((SKIPPED++))
+  else
+    echo "  ✗✗✗ $REPO configuration failed"
+    ((FAILED++))
   fi
   
   echo ""
@@ -153,9 +204,10 @@ echo "  ✗ Failed: $FAILED"
 echo ""
 echo "Protected Branches Configuration:"
 echo "  • production, main, dev"
+echo "    - Created from default branch if missing"
 echo "    - Requires 1 PR approval"
-echo "    - Only $USERNAME can merge"
-echo "    - No force pushes allowed"
+echo "    - Only $USERNAME can push/merge"
+echo "    - Force pushes allowed ONLY for $USERNAME"
 echo "    - No branch deletion allowed"
 echo "    - Rules enforced for administrators too"
 echo ""
@@ -163,4 +215,7 @@ echo "To merge to these branches:"
 echo "  1. Create a PR from another branch"
 echo "  2. Get 1 approval"
 echo "  3. $USERNAME must merge the PR"
+echo ""
+echo "Force Push (only for $USERNAME):"
+echo "  git push --force-with-lease origin $USERNAME"
 echo ""
