@@ -1,9 +1,8 @@
 #!/bin/bash
 
-# Branch Protection Setup Script
+# Branch Protection Setup Script with Diagnostics
 # Creates production, main, and dev branches (if they don't exist)
 # Locks them and only allows merges by the repository owner
-# Only allows force pushes for the repository owner
 
 REPOS=(
   "auth-client"
@@ -67,10 +66,9 @@ echo "This will:"
 echo "  1. Create 'production', 'main', and 'dev' branches (if missing)"
 echo "  2. Lock these branches - only merges allowed"
 echo "  3. Restrict merges to: $USERNAME only"
-echo "  4. Allow force pushes ONLY to: $USERNAME"
-echo "  5. Require 1 PR approval"
-echo "  6. Prevent branch deletion"
-echo "  7. Enforce rules for administrators too"
+echo "  4. Require 1 PR approval"
+echo "  5. Prevent branch deletion"
+echo "  6. Enforce rules for administrators too"
 echo ""
 read -p "Continue? (y/n) " -n 1 -r
 echo
@@ -140,36 +138,46 @@ EOF
     
     echo "    → Applying protection rules to '$BRANCH'..."
     
-    # Configure branch protection
-    # First: Set the main protection rule
-    if gh api repos/$ORG/$REPO/branches/$BRANCH/protection \
-      -f required_status_checks=null \
-      -f enforce_admins=true \
-      -f required_pull_request_reviews='{"dismiss_stale_reviews":false,"require_code_owner_reviews":false,"required_approving_review_count":1}' \
-      -f restrictions='{"users":["'$USERNAME'"],"teams":[],"apps":[]}' \
-      -f allow_force_pushes=false \
-      -f allow_deletions=false \
-      -f required_conversation_resolution=false \
-      -f required_linear_history=false > /dev/null 2>&1; then
-      echo "    ✓ Main protection rules applied"
-      
-      # Second: Add force push rule for the user
-      if gh api repos/$ORG/$REPO/branches/$BRANCH/protection/enforce_admins \
-        --method POST -f enforce_admins=true > /dev/null 2>&1; then
-        echo "    ✓ Admin enforcement applied"
-      fi
-      
-      # Third: Add force push dismissal restriction for the user
-      if gh api repos/$ORG/$REPO/branches/$BRANCH/protection/dismiss_stale_reviews \
-        -f dismiss_stale_reviews=false > /dev/null 2>&1; then
-        echo "    ✓ Settings finalized"
-      fi
-      
-      ((REPO_SUCCESS++))
+    # Create a temporary file for the JSON payload
+    TEMP_FILE=$(mktemp)
+    cat > "$TEMP_FILE" << 'EOF'
+{
+  "required_status_checks": null,
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false,
+    "required_approving_review_count": 1
+  },
+  "restrictions": {
+    "users": ["USERNAME_PLACEHOLDER"],
+    "teams": [],
+    "apps": []
+  },
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_conversation_resolution": false
+}
+EOF
+    
+    # Replace placeholder with actual username
+    sed -i "s/USERNAME_PLACEHOLDER/$USERNAME/g" "$TEMP_FILE"
+    
+    # Try to apply protection
+    RESPONSE=$(gh api repos/$ORG/$REPO/branches/$BRANCH/protection \
+      --input "$TEMP_FILE" 2>&1)
+    
+    RESPONSE_CODE=$?
+    
+    if [ $RESPONSE_CODE -eq 0 ]; then
       echo "    ✓ Protection rules applied to '$BRANCH'"
+      ((REPO_SUCCESS++))
     else
       echo "    ✗ Failed to apply protection rules to '$BRANCH'"
+      echo "      Error: $(echo "$RESPONSE" | head -1)"
     fi
+    
+    rm -f "$TEMP_FILE"
   done
   
   echo ""
@@ -200,15 +208,6 @@ echo "  • production, main, dev"
 echo "    - Created from default branch if missing"
 echo "    - Requires 1 PR approval"
 echo "    - Only $USERNAME can push/merge"
-echo "    - Force pushes allowed ONLY for $USERNAME"
 echo "    - No branch deletion allowed"
 echo "    - Rules enforced for administrators too"
-echo ""
-echo "To merge to these branches:"
-echo "  1. Create a PR from another branch"
-echo "  2. Get 1 approval"
-echo "  3. $USERNAME must merge the PR"
-echo ""
-echo "NOTE: To enable force push for $USERNAME:"
-echo "Go to: Settings → Branches → Branch protection rule → Allow force pushes → Specify who can force push"
 echo ""
