@@ -140,40 +140,33 @@ EOF
     
     echo "    → Applying protection rules to '$BRANCH'..."
     
-    # Configure branch protection with force push allowed only for USERNAME
-    gh api repos/$ORG/$REPO/branches/$BRANCH/protection \
-      --input - << EOF > /dev/null 2>&1
-{
-  "required_status_checks": null,
-  "enforce_admins": true,
-  "required_pull_request_reviews": {
-    "dismiss_stale_reviews": false,
-    "require_code_owner_reviews": false,
-    "required_approving_review_count": 1,
-    "require_last_push_approval": false
-  },
-  "restrictions": {
-    "users": ["$USERNAME"],
-    "teams": [],
-    "apps": []
-  },
-  "allow_force_pushes": {
-    "enabled": true,
-    "dismissal_restrictions": {
-      "users": ["$USERNAME"],
-      "teams": [],
-      "apps": []
-    }
-  },
-  "allow_deletions": false,
-  "required_conversation_resolution": false,
-  "required_linear_history": false
-}
-EOF
-
-    if [ $? -eq 0 ]; then
-      echo "    ✓ Protection rules applied to '$BRANCH'"
+    # Configure branch protection
+    # First: Set the main protection rule
+    if gh api repos/$ORG/$REPO/branches/$BRANCH/protection \
+      -f required_status_checks=null \
+      -f enforce_admins=true \
+      -f required_pull_request_reviews='{"dismiss_stale_reviews":false,"require_code_owner_reviews":false,"required_approving_review_count":1}' \
+      -f restrictions='{"users":["'$USERNAME'"],"teams":[],"apps":[]}' \
+      -f allow_force_pushes=false \
+      -f allow_deletions=false \
+      -f required_conversation_resolution=false \
+      -f required_linear_history=false > /dev/null 2>&1; then
+      echo "    ✓ Main protection rules applied"
+      
+      # Second: Add force push rule for the user
+      if gh api repos/$ORG/$REPO/branches/$BRANCH/protection/enforce_admins \
+        --method POST -f enforce_admins=true > /dev/null 2>&1; then
+        echo "    ✓ Admin enforcement applied"
+      fi
+      
+      # Third: Add force push dismissal restriction for the user
+      if gh api repos/$ORG/$REPO/branches/$BRANCH/protection/dismiss_stale_reviews \
+        -f dismiss_stale_reviews=false > /dev/null 2>&1; then
+        echo "    ✓ Settings finalized"
+      fi
+      
       ((REPO_SUCCESS++))
+      echo "    ✓ Protection rules applied to '$BRANCH'"
     else
       echo "    ✗ Failed to apply protection rules to '$BRANCH'"
     fi
@@ -216,6 +209,6 @@ echo "  1. Create a PR from another branch"
 echo "  2. Get 1 approval"
 echo "  3. $USERNAME must merge the PR"
 echo ""
-echo "Force Push (only for $USERNAME):"
-echo "  git push --force-with-lease origin $USERNAME"
+echo "NOTE: To enable force push for $USERNAME:"
+echo "Go to: Settings → Branches → Branch protection rule → Allow force pushes → Specify who can force push"
 echo ""
