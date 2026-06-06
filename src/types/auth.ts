@@ -55,12 +55,14 @@ export interface SignupResponse {
   access_token: string;
   user: { id: string; email: string };
   org: { id: string; name: string; slug: string };
+  email_sent?: boolean;
 }
 
 export interface SignupMemberResponse {
   access_token: string;
   user: { id: string; email: string };
   org?: { id: string };
+  email_sent?: boolean;
 }
 
 export interface RefreshResponse {
