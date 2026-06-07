@@ -9,6 +9,8 @@ export interface SignupPayload {
   email: string;
   password: string;
   org_name: string;
+  /** Role to assign in addition to 'owner' (e.g., 'college_admin', 'school_admin', 'university_admin'). */
+  role: string;
   /** Base URL for email links. Must be in the server's ALLOWED_APP_URLS allowlist. */
   redirect_url?: string;
 }
