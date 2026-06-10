@@ -214,6 +214,7 @@ export type AuthEventType = "LOGIN" | "LOGOUT" | "REFRESH";
 
 export interface AuthEvent {
   type: AuthEventType;
+  token?: string;
 }
 
 /**

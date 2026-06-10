@@ -3,12 +3,13 @@
  *  - always sends cookies (credentials: "include")
  *  - sets Content-Type to JSON only when a body is present
  *  - throws on non-2xx responses with the response body
+ *  - supports optional timeout with AbortSignal
  */
 export async function fetcher<T = unknown>(
   url: string,
-  options: RequestInit = {},
+  options: RequestInit & { timeoutMs?: number } = {},
 ): Promise<T> {
-  const { headers: optHeaders, body, method, ...rest } = options;
+  const { headers: optHeaders, body, method, signal: callerSignal, timeoutMs, ...rest } = options;
 
   // Only set Content-Type: application/json when there's a body.
   // Some servers reject bodyless requests (GET, HEAD) that carry Content-Type.
@@ -16,41 +17,81 @@ export async function fetcher<T = unknown>(
     ? { "Content-Type": "application/json" }
     : {};
 
-  const res = await fetch(url, {
-    ...rest,
-    method,
-    body,
-    credentials: "include",
-    headers: {
-      ...baseHeaders,
-      ...normalizeHeaders(optHeaders),
-    },
-  });
+  // Create abort controller for timeout if specified
+  let abortController: AbortController | undefined;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let combinedSignal: AbortSignal | undefined = callerSignal ?? undefined;
 
-  if (!res.ok) {
-    // Read body as text first — avoids double-consumption if json() fails
-    const raw = await res.text();
-    let message: string;
-    try {
-      const body = JSON.parse(raw);
-      message = body?.message ?? body?.error ?? raw;
-    } catch {
-      message = raw;
+  if (timeoutMs) {
+    abortController = new AbortController();
+
+    // Combine caller's signal with timeout signal
+    if (callerSignal) {
+      // If caller signal is already aborted, use it directly
+      if (callerSignal.aborted) {
+        combinedSignal = callerSignal;
+      } else {
+        // Listen to caller's signal and propagate abort
+        const abortHandler = () => {
+          abortController?.abort();
+          callerSignal.removeEventListener("abort", abortHandler);
+        };
+        callerSignal.addEventListener("abort", abortHandler);
+        combinedSignal = abortController.signal;
+      }
+    } else {
+      combinedSignal = abortController.signal;
     }
-    throw new AuthFetchError(res.status, message);
+
+    // Set timeout
+    timeoutId = setTimeout(() => {
+      abortController?.abort();
+    }, timeoutMs);
   }
 
-  // Handle empty responses (e.g. 204 No Content or empty 200)
-  const text = await res.text();
-  if (!text) return undefined as unknown as T;
-
   try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new AuthFetchError(
-      res.status,
-      `Expected JSON response from ${url} but received: ${text.slice(0, 200)}`,
-    );
+    const res = await fetch(url, {
+      ...rest,
+      method,
+      body,
+      credentials: "include",
+      signal: combinedSignal,
+      headers: {
+        ...baseHeaders,
+        ...normalizeHeaders(optHeaders),
+      },
+    });
+
+    if (!res.ok) {
+      // Read body as text first — avoids double-consumption if json() fails
+      const raw = await res.text();
+      let message: string;
+      try {
+        const body = JSON.parse(raw);
+        message = body?.message ?? body?.error ?? raw;
+      } catch {
+        message = raw;
+      }
+      throw new AuthFetchError(res.status, message);
+    }
+
+    // Handle empty responses (e.g. 204 No Content or empty 200)
+    const text = await res.text();
+    if (!text) return undefined as unknown as T;
+
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new AuthFetchError(
+        res.status,
+        `Expected JSON response from ${url} but received: ${text.slice(0, 200)}`,
+      );
+    }
+  } finally {
+    // Clean up timeout
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 

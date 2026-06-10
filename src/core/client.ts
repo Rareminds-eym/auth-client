@@ -1,40 +1,43 @@
 import { MemoryStore } from "../storage/memoryStore.js";
-import { fetcher, normalizeHeaders } from "../utils/fetcher.js";
 import { SyncChannel } from "../sync/channel.js";
 import type {
-  LoginPayload,
-  SignupPayload,
-  SignupMemberPayload,
-  SwitchOrgPayload,
-  CreateInvitePayload,
   AcceptInvitePayload,
-  VerifyEmailPayload,
-  RequestVerificationPayload,
-  ForgotPasswordPayload,
-  ResetPasswordPayload,
-  CancelInvitePayload,
-  ResendInvitePayload,
-  LoginResponse,
-  SignupResponse,
-  SignupMemberResponse,
-  RefreshResponse,
-  SwitchOrgResponse,
-  ListOrgsResponse,
-  CreateInviteResponse,
   AcceptInviteResponse,
-  RequestVerificationResponse,
-  VerifyEmailResponse,
-  ForgotPasswordResponse,
-  ResetPasswordResponse,
-  CancelInviteResponse,
-  ResendInviteResponse,
-  MeResponse,
   AuthClientConfig,
-  SessionResult,
   AuthStateChangeCallback,
+  CancelInvitePayload,
+  CancelInviteResponse,
+  CreateInvitePayload,
+  CreateInviteResponse,
+  ForgotPasswordPayload,
+  ForgotPasswordResponse,
+  ListOrgsResponse,
+  LoginPayload,
+  LoginResponse,
+  MeResponse,
+  RefreshResponse,
+  RequestVerificationPayload,
+  RequestVerificationResponse,
+  ResendInvitePayload,
+  ResendInviteResponse,
+  ResetPasswordPayload,
+  ResetPasswordResponse,
+  SessionResult,
+  SignupMemberPayload,
+  SignupMemberResponse,
+  SignupPayload,
+  SignupResponse,
+  SwitchOrgPayload,
+  SwitchOrgResponse,
+  VerifyEmailPayload,
+  VerifyEmailResponse,
 } from "../types/auth.js";
+import { fetcher, normalizeHeaders } from "../utils/fetcher.js";
 
 const DEFAULT_CHANNEL_NAME = "rareminds_auth_channel";
+const MAX_REFRESH_RETRIES = 2;
+const REFRESH_BASE_BACKOFF_MS = 300;
+const REFRESH_JITTER_MS = 100;
 
 export class AuthClient {
   readonly #baseURL: string;
@@ -159,6 +162,7 @@ export class AuthClient {
   /**
    * Silent token refresh using the HttpOnly refresh-token cookie.
    * De-duplicated: concurrent calls share a single in-flight request.
+   * Cross-tab single-flight using Web Locks API (with localStorage fallback).
    */
   async refresh(): Promise<RefreshResponse> {
     this.#assertNotDestroyed();
@@ -169,7 +173,7 @@ export class AuthClient {
     }
 
     this.#log("refresh: starting");
-    this.#refreshing = this.#executeRefresh();
+    this.#refreshing = this.#refreshSingleFlight();
 
     try {
       return await this.#refreshing;
@@ -178,18 +182,161 @@ export class AuthClient {
     }
   }
 
+  async #refreshSingleFlight(): Promise<RefreshResponse> {
+    // Cross-tab single-flight using Web Locks API
+    if (typeof navigator !== "undefined" && "locks" in navigator) {
+      this.#log("refresh: using Web Locks API for cross-tab coordination");
+      return navigator.locks.request(
+        "rareminds_auth_refresh",
+        { mode: "exclusive" },
+        async () => {
+          // Check if another tab already refreshed while we were waiting
+          const currentToken = this.#store.get();
+          if (currentToken && this.#refreshing) {
+            this.#log("refresh: token already refreshed by another tab");
+            return { access_token: currentToken, refresh_token: "" } as RefreshResponse;
+          }
+          return this.#executeRefresh();
+        }
+      );
+    }
+
+    // Fallback: localStorage mutex for older browsers
+    this.#log("refresh: using localStorage mutex for cross-tab coordination");
+    return this.#executeRefreshWithLocalStorageMutex();
+  }
+
+  async #executeRefreshWithLocalStorageMutex(): Promise<RefreshResponse> {
+    const LOCK_KEY = "rareminds_auth_refresh_lock";
+    const LOCK_TIMEOUT_MS = 10000; // 10 seconds stale lock timeout
+    const POLL_INTERVAL_MS = 50;
+
+    // Try to acquire lock
+    const acquireLock = (): boolean => {
+      const now = Date.now();
+      const existingLock = localStorage.getItem(LOCK_KEY);
+
+      if (existingLock) {
+        try {
+          const { timestamp } = JSON.parse(existingLock);
+          // Check if lock is stale
+          if (now - timestamp > LOCK_TIMEOUT_MS) {
+            this.#log("refresh: removing stale lock");
+            localStorage.removeItem(LOCK_KEY);
+          } else {
+            return false; // Lock is held by another tab
+          }
+        } catch {
+          // Invalid lock format, remove it
+          localStorage.removeItem(LOCK_KEY);
+        }
+      }
+
+      // Acquire lock
+      const lockId = `${now}_${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(LOCK_KEY, JSON.stringify({ timestamp: now, id: lockId }));
+      return true;
+    };
+
+    const releaseLock = () => {
+      try {
+        localStorage.removeItem(LOCK_KEY);
+      } catch {
+        // Ignore errors during cleanup
+      }
+    };
+
+    // Wait for lock with timeout
+    const maxWaitTime = 5000; // 5 seconds max wait
+    const startWait = Date.now();
+
+    while (!acquireLock()) {
+      if (Date.now() - startWait > maxWaitTime) {
+        this.#log("refresh: lock acquisition timeout, proceeding anyway");
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+
+      // Check if another tab already refreshed
+      const currentToken = this.#store.get();
+      if (currentToken) {
+        this.#log("refresh: token already refreshed by another tab (detected via BroadcastChannel)");
+        return { access_token: currentToken, refresh_token: "" } as RefreshResponse;
+      }
+    }
+
+    try {
+      return await this.#executeRefresh();
+    } finally {
+      releaseLock();
+    }
+  }
+
   async #executeRefresh(): Promise<RefreshResponse> {
-    const data = await fetcher<RefreshResponse>(
-      `${this.#baseURL}/auth/refresh`,
-      { method: "POST" },
-    );
+    let lastError: Error | null = null;
 
-    this.#store.set(data.access_token);
-    this.#emit("REFRESH");
-    this.#broadcastIfAllowed({ type: "REFRESH" });
-    this.#log("refresh: success");
+    for (let attempt = 0; attempt <= MAX_REFRESH_RETRIES; attempt++) {
+      if (attempt > 0) {
+        // Exponential backoff with jitter
+        const backoffMs = REFRESH_BASE_BACKOFF_MS * Math.pow(2, attempt - 1);
+        const jitter = Math.random() * REFRESH_JITTER_MS;
+        const delayMs = backoffMs + jitter;
 
-    return data;
+        this.#log(`refresh: retry attempt ${attempt}/${MAX_REFRESH_RETRIES} after ${delayMs.toFixed(0)}ms`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+
+      try {
+        const data = await fetcher<RefreshResponse>(
+          `${this.#baseURL}/auth/refresh`,
+          {
+            method: "POST",
+            timeoutMs: 8000, // 8 second timeout
+          },
+        );
+
+        this.#store.set(data.access_token);
+        this.#emit("REFRESH");
+        this.#broadcastIfAllowed({ type: "REFRESH", token: data.access_token });
+        this.#log("refresh: success");
+
+        return data;
+      } catch (error) {
+        lastError = error as Error;
+
+        // Check if this is a definitive auth error (401/403) - don't retry
+        if (error instanceof Error && 'status' in error) {
+          const status = (error as any).status;
+          if (status === 401 || status === 403) {
+            this.#log(`refresh: definitive auth error (${status}), not retrying`);
+            break;
+          }
+        }
+
+        // Check for transient errors (network, timeout, 5xx, 429)
+        const isTransient =
+          error instanceof Error && (
+            error.name === "AbortError" ||
+            error.message.includes("timeout") ||
+            error.message.includes("network") ||
+            ('status' in error && ((error as any).status >= 500 || (error as any).status === 429))
+          );
+
+        if (!isTransient || attempt === MAX_REFRESH_RETRIES) {
+          this.#log(`refresh: ${isTransient ? 'exhausted retries' : 'non-transient error'}`);
+          break;
+        }
+
+        this.#log(`refresh: transient error, will retry: ${error.message}`);
+      }
+    }
+
+    // All retries exhausted or definitive failure
+    this.#log("refresh: failed, triggering logout");
+    await this.logout();
+    this.#notifySessionExpired();
+
+    throw lastError || new Error("Refresh failed after retries");
   }
 
   /**
@@ -218,7 +365,7 @@ export class AuthClient {
     this.#store.set(data.access_token);
     this.#initialized = true;
     this.#emit("REFRESH");
-    this.#broadcastIfAllowed({ type: "REFRESH" });
+    this.#broadcastIfAllowed({ type: "REFRESH", token: data.access_token });
     this.#log("switchOrg: success", { org_id: data.org_id });
 
     return data;
@@ -423,9 +570,7 @@ export class AuthClient {
       return { authenticated: true };
     } catch {
       this.#store.clear();
-      if (!this.#initialized) {
-        this.#initialized = false;
-      }
+      this.#initialized = false; // Unconditional reset on failure
       this.#log("initSession: not authenticated");
       return { authenticated: false };
     }
@@ -437,6 +582,7 @@ export class AuthClient {
    * 1. Attaches the current access token as Bearer header.
    * 2. On 401, silently refreshes and retries once.
    * 3. On second failure, triggers logout + onSessionExpired callback.
+   * 4. Syncs X-Access-Token header from server-side refresh responses.
    *
    * Respects the caller's AbortSignal.
    */
@@ -458,6 +604,13 @@ export class AuthClient {
 
     let res = await makeRequest(this.#store.get());
 
+    // Sync X-Access-Token from response if present (server-side refresh)
+    const serverRefreshedToken = res.headers.get("X-Access-Token");
+    if (serverRefreshedToken) {
+      this.#log("fetch: syncing X-Access-Token from server-side refresh");
+      this.#store.set(serverRefreshedToken);
+    }
+
     if (res.status === 401) {
       if (signal?.aborted) {
         this.#log("fetch: 401 received but signal already aborted, skipping retry");
@@ -469,6 +622,13 @@ export class AuthClient {
       try {
         const refreshed = await this.refresh();
         res = await makeRequest(refreshed.access_token);
+
+        // Sync X-Access-Token from retry response if present
+        const retryToken = res.headers.get("X-Access-Token");
+        if (retryToken) {
+          this.#log("fetch: syncing X-Access-Token from retry response");
+          this.#store.set(retryToken);
+        }
       } catch {
         this.#log("fetch: refresh failed, logging out");
         await this.logout();
@@ -584,11 +744,18 @@ export class AuthClient {
 
         case "LOGIN":
         case "REFRESH":
-          this.#log(`cross-tab: ${event.type} received, rehydrating`);
-          this.#suppressBroadcastDepth++;
-          this.initSession().finally(() => {
-            this.#suppressBroadcastDepth--;
-          });
+          if (event.token) {
+            this.#log(`cross-tab: ${event.type} received with token, syncing state directly`);
+            this.#store.set(event.token);
+            this.#initialized = true;
+            this.#emit(event.type);
+          } else {
+            this.#log(`cross-tab: ${event.type} received without token, rehydrating via network`);
+            this.#suppressBroadcastDepth++;
+            this.initSession().finally(() => {
+              this.#suppressBroadcastDepth--;
+            });
+          }
           break;
       }
     });
@@ -596,7 +763,7 @@ export class AuthClient {
 
   // ─── Internal helpers ──────────────────────────────────────
 
-  #broadcastIfAllowed(event: { type: "LOGIN" | "LOGOUT" | "REFRESH" }): void {
+  #broadcastIfAllowed(event: { type: "LOGIN" | "LOGOUT" | "REFRESH", token?: string }): void {
     if (this.#suppressBroadcastDepth === 0 && !this.#destroyed) {
       this.#channel.broadcast(event);
     }
