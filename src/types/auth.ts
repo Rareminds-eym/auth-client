@@ -13,6 +13,7 @@ export interface SignupPayload {
   role: string;
   /** Base URL for email links. Must be in the server's ALLOWED_APP_URLS allowlist. */
   redirect_url?: string;
+  user_metadata?: Record<string, unknown>;
 }
 
 export interface SignupMemberPayload {
@@ -23,6 +24,7 @@ export interface SignupMemberPayload {
   org_id?: string;
   /** Base URL for email links. Must be in the server's ALLOWED_APP_URLS allowlist. */
   redirect_url?: string;
+  user_metadata?: Record<string, unknown>;
 }
 
 export interface SwitchOrgPayload {
@@ -166,6 +168,7 @@ export interface MeResponse {
   products: string[];
   membership_status: MembershipStatus;
   is_email_verified: boolean;
+  user_metadata?: Record<string, unknown>;
 }
 
 /**
