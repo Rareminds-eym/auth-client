@@ -186,14 +186,21 @@ export class AuthClient {
     // Cross-tab single-flight using Web Locks API
     if (typeof navigator !== "undefined" && "locks" in navigator) {
       this.#log("refresh: using Web Locks API for cross-tab coordination");
+
+      // Snapshot the token BEFORE acquiring the lock so we can detect if
+      // another tab's REFRESH broadcast updated it while we were waiting.
+      const tokenBeforeLock = this.#store.get();
+
       return navigator.locks.request(
         "rareminds_auth_refresh",
         { mode: "exclusive" },
         async () => {
-          // Check if another tab already refreshed while we were waiting
           const currentToken = this.#store.get();
-          if (currentToken && this.#refreshing) {
-            this.#log("refresh: token already refreshed by another tab");
+          // Only short-circuit when we actually HAVE a new token from another tab.
+          // If currentToken is null (store was cleared while waiting for lock),
+          // fall through to #executeRefresh so it can try to obtain one.
+          if (currentToken && currentToken !== tokenBeforeLock) {
+            this.#log("refresh: token already refreshed by another tab (detected via BroadcastChannel)");
             return { access_token: currentToken, refresh_token: "" } as RefreshResponse;
           }
           return this.#executeRefresh();
@@ -246,6 +253,9 @@ export class AuthClient {
       }
     };
 
+    // Capture the token before waiting so we can detect cross-tab updates
+    const tokenBeforeLock = this.#store.get();
+
     // Wait for lock with timeout
     const maxWaitTime = 5000; // 5 seconds max wait
     const startWait = Date.now();
@@ -257,9 +267,12 @@ export class AuthClient {
       }
       await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
 
-      // Check if another tab already refreshed
+      // Check if another tab already refreshed while we were waiting
       const currentToken = this.#store.get();
-      if (currentToken) {
+      // Only short-circuit when we actually HAVE a new token from another tab.
+      // If currentToken is null (store was cleared while waiting for lock),
+      // fall through to the lock acquisition loop so #executeRefresh can try.
+      if (currentToken && currentToken !== tokenBeforeLock) {
         this.#log("refresh: token already refreshed by another tab (detected via BroadcastChannel)");
         return { access_token: currentToken, refresh_token: "" } as RefreshResponse;
       }
@@ -272,8 +285,9 @@ export class AuthClient {
     }
   }
 
-  async #executeRefresh(): Promise<RefreshResponse> {
+  async #executeRefresh(options?: { suppressLogoutOnFailure?: boolean }): Promise<RefreshResponse> {
     let lastError: Error | null = null;
+    const suppressLogout = options?.suppressLogoutOnFailure === true;
 
     for (let attempt = 0; attempt <= MAX_REFRESH_RETRIES; attempt++) {
       if (attempt > 0) {
@@ -332,6 +346,11 @@ export class AuthClient {
     }
 
     // All retries exhausted or definitive failure
+    if (suppressLogout) {
+      this.#log("refresh: failed (suppressLogoutOnFailure), throwing without logout");
+      throw lastError || new Error("Refresh failed after retries");
+    }
+
     this.#log("refresh: failed, triggering logout");
     await this.logout();
     this.#notifySessionExpired();
@@ -558,19 +577,22 @@ export class AuthClient {
    * Restore session on page load / reload.
    * Call this once at app startup (before rendering protected routes).
    *
-   * Uses the refresh-token cookie to obtain a fresh access token.
+   * Uses the refresh-token cookie to obtain a fresh access token. Delegates to
+   * #executeRefresh with suppressLogoutOnFailure so a failure on initial page
+   * load does not log out the user across all tabs — it simply means "no
+   * session here." See: cross-tab verify-email flow.
    */
   async initSession(): Promise<SessionResult> {
     this.#log("initSession: starting");
 
     try {
-      await this.refresh();
+      await this.#executeRefresh({ suppressLogoutOnFailure: true });
       this.#initialized = true;
       this.#log("initSession: authenticated");
       return { authenticated: true };
     } catch {
       this.#store.clear();
-      this.#initialized = false; // Unconditional reset on failure
+      this.#initialized = false;
       this.#log("initSession: not authenticated");
       return { authenticated: false };
     }
