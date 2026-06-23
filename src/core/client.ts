@@ -89,7 +89,7 @@ export class AuthClient {
     this.#store.set(data.access_token);
     this.#initialized = true;
     this.#emit("LOGIN");
-    this.#broadcastIfAllowed({ type: "LOGIN" });
+    this.#broadcastIfAllowed({ type: "LOGIN", token: data.access_token });
     this.#log("login: success");
 
     return data;
@@ -111,7 +111,7 @@ export class AuthClient {
     this.#store.set(data.access_token);
     this.#initialized = true;
     this.#emit("LOGIN");
-    this.#broadcastIfAllowed({ type: "LOGIN" });
+    this.#broadcastIfAllowed({ type: "LOGIN", token: data.access_token });
     this.#log("signup: success");
 
     return data;
@@ -134,7 +134,7 @@ export class AuthClient {
     this.#store.set(data.access_token);
     this.#initialized = true;
     this.#emit("LOGIN");
-    this.#broadcastIfAllowed({ type: "LOGIN" });
+    this.#broadcastIfAllowed({ type: "LOGIN", token: data.access_token });
     this.#log("signupMember: success");
 
     return data;
@@ -201,7 +201,7 @@ export class AuthClient {
           // fall through to #executeRefresh so it can try to obtain one.
           if (currentToken && currentToken !== tokenBeforeLock) {
             this.#log("refresh: token already refreshed by another tab (detected via BroadcastChannel)");
-            return { access_token: currentToken, refresh_token: "" } as RefreshResponse;
+            return { access_token: currentToken } as RefreshResponse;
           }
           return this.#executeRefresh();
         }
@@ -274,7 +274,7 @@ export class AuthClient {
       // fall through to the lock acquisition loop so #executeRefresh can try.
       if (currentToken && currentToken !== tokenBeforeLock) {
         this.#log("refresh: token already refreshed by another tab (detected via BroadcastChannel)");
-        return { access_token: currentToken, refresh_token: "" } as RefreshResponse;
+        return { access_token: currentToken } as RefreshResponse;
       }
     }
 
@@ -351,8 +351,11 @@ export class AuthClient {
       throw lastError || new Error("Refresh failed after retries");
     }
 
-    this.#log("refresh: failed, triggering logout");
-    await this.logout();
+    this.#log("refresh: failed (401/403), triggering internal logout");
+    this.#store.clear();
+    this.#initialized = false;
+    this.#emit("LOGOUT");
+    this.#broadcastIfAllowed({ type: "LOGOUT" });
     this.#notifySessionExpired();
 
     throw lastError || new Error("Refresh failed after retries");
